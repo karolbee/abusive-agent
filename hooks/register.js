@@ -1,0 +1,244 @@
+// Abusive Agent: po każdej turze Claude Code mówi przez głośnik jedno wulgarne
+// zdanie o tym, co agent zrobił. Mowa idzie przez systemowy syntezator, tekst
+// pisze haiku na koncie użytkownika, a bez sieci leci pula awaryjna.
+//
+// Każde wywołanie `$` siedzi w tym pliku, w funkcjach najwyższego poziomu;
+// lib/ to czyste funkcje bez dostępu do silnika.
+
+import { cleanText, detectLanguage, languageFromConfig, lastUserText, parseNames } from './lib/language.js'
+import { intensityFromConfig, isSafeLine, lineFromReply, lineRequest, pickFallback, SITUATIONS, withName } from './lib/lines.js'
+import { parseSayVoices, speechAttempts, speechOutcome, SPEECH_TIMEOUT_MS, voiceHint } from './lib/speak.js'
+
+const DEDUPE_MS = 5000
+const GENERATIONS_PER_HOUR = 60
+
+const COMMANDS = [
+  { name: 'abusive-test', description: 'Abusive Agent: powiedz teraz przykładowy tekst', argumentHint: '[done|question|permission|idle|error]' },
+  { name: 'abusive-mute', description: 'Abusive Agent: wycisz albo odcisz głos w tej sesji', immediate: true },
+  { name: 'abusive-context', description: 'Abusive Agent: włącz/wyłącz komentowanie treści zadania (tryb kontekstowy)' },
+  { name: 'abusive-idle', description: 'Abusive Agent: włącz/wyłącz komunikat przy bezczynności' },
+]
+
+export function register(on, options) {
+  const s = {
+    hasConsent: options.adult_consent === true,
+    configLang: languageFromConfig(options.language),
+    intensity: intensityFromConfig(options.intensity),
+    names: parseNames(options.names),
+    isHeadless: false,
+    isMuted: false,
+    isContextOn: true,
+    isIdleOn: true,
+    isDebug: false,
+    hasToldConsent: false,
+    hasPermissionRequest: false,
+    platform: undefined,
+    isSpeaking: false,
+    pending: undefined,
+    lastAt: {},
+    recent: {},
+    hinted: new Set(),
+    generatedAt: [],
+  }
+
+  on('session.start', async ($, e, next) => {
+    await start($, s, e)
+    return next(e)
+  })
+
+  on('turn.complete', ($, e, next) => {
+    if (e.agentId === undefined && !e.isAborted) trigger($, s, e.reason === 'answer' ? 'done' : 'error', e.answer)
+    return next(e)
+  })
+
+  on('tool.call', { tool: 'AskUserQuestion' }, ($, e, next) => {
+    if (e.agentId === undefined) trigger($, s, 'question', '')
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Okno zgody daje dwa zdarzenia: PermissionRequest od razu i Notification kilka
+  // sekund później. Notification mówi tylko tam, gdzie PermissionRequest nie dociera.
+  on('classic.Notification', ($, e, next) => {
+    if (e.agent_id === undefined) {
+      if (e.notification_type === 'permission_prompt' && !s.hasPermissionRequest) trigger($, s, 'permission', '')
+      if (e.notification_type === 'idle_prompt' && s.isIdleOn) trigger($, s, 'idle', '')
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('classic.PermissionRequest', ($, e, next) => {
+    s.hasPermissionRequest = true
+    if (e.agent_id === undefined) trigger($, s, 'permission', '')
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('command.run', { command: 'abusive-test' }, ($, e) => runTest($, s, e.args))
+
+  on('command.run', { command: 'abusive-mute' }, () => {
+    s.isMuted = !s.isMuted
+    s.pending = undefined
+    return { text: s.isMuted ? 'Abusive Agent: cisza w tej sesji. /abusive-mute włącza głos z powrotem.' : 'Abusive Agent: znowu gadam.' }
+  })
+
+  on('command.run', { command: 'abusive-context' }, $ => toggleContext($, s))
+
+  on('command.run', { command: 'abusive-idle' }, $ => toggleIdle($, s))
+}
+
+async function start($, s, e) {
+  const entrypoint = (await $.env.get('CLAUDE_CODE_ENTRYPOINT')) ?? ''
+  const isForced = (await $.env.get('ABUSIVE_AGENT_FORCE')) === '1'
+  const isCi = ['1', 'true'].includes(((await $.env.get('CI')) ?? '').toLowerCase())
+  // `claude -p`, Agent SDK i CI milczą celowo; aplikacja desktop i IDE mówią.
+  s.isHeadless = !isForced && (isCi || (!e.isInteractive && (entrypoint === '' || entrypoint.startsWith('sdk'))))
+  s.isDebug = (await $.env.get('ABUSIVE_AGENT_DEBUG')) === '1'
+  s.isContextOn = (await $.store.get('context')) !== false
+  s.isIdleOn = (await $.store.get('idle')) !== false
+
+  for (const command of COMMANDS) await $.command.register(command)
+
+  if (!s.hasConsent && !s.isHeadless && !s.hasToldConsent) {
+    s.hasToldConsent = true
+    $.ui.toast('Abusive Agent milczy: brak zgody 18+. Włącz ją w konfiguracji pluginu (adult_consent).', { timeoutMs: 8000 })
+  }
+}
+
+// Hook oddaje sterowanie od razu, mowa startuje w tle.
+function trigger($, s, situation, answer) {
+  if (!s.hasConsent || s.isHeadless || s.isMuted) return
+  const now = Date.now()
+  if (situation !== 'done' && now - (s.lastAt[situation] ?? 0) < DEDUPE_MS) return
+  s.lastAt[situation] = now
+  $.clock.after(0, () => {
+    react($, s, situation, answer).catch(error => log($, s, `błąd: ${error?.message ?? error}`))
+  })
+}
+
+async function react($, s, situation, answer) {
+  const { line, lang, source } = await compose($, s, situation, answer)
+  if (!isSafeLine(line)) return
+  if (s.configLang === 'auto') await $.store.set('lastLang', lang)
+  log($, s, `${situation} (${source})`)
+  if (!s.isMuted) await say($, s, line, lang)
+}
+
+// Ustala, co powiedzieć: haiku dla końca tury i błędu, pula dla reszty.
+async function compose($, s, situation, answer) {
+  const messages = await $.session.messages().catch(() => [])
+  const userText = lastUserText(messages)
+  const guessLang = s.configLang === 'auto' ? detectLanguage(userText) : undefined
+  const stored = await $.store.get('lastLang')
+  const fallbackLang = s.configLang !== 'auto' ? s.configLang : guessLang ?? (typeof stored === 'string' ? stored : 'en')
+  const name = s.names.length > 0 ? s.names[Math.floor(Math.random() * s.names.length)] : undefined
+
+  if ((situation === 'done' || situation === 'error') && mayGenerate(s)) {
+    const request = lineRequest({
+      situation,
+      intensity: s.intensity,
+      lang: s.configLang,
+      guessLang,
+      fallbackLang,
+      userText,
+      answer: cleanText(answer),
+      name,
+      contextOn: s.isContextOn,
+    })
+    const generated = await $.model
+      .complete(request)
+      .then(lineFromReply)
+      .catch(error => ({ reason: `refused: ${error?.message ?? error}` }))
+    if (generated.line) return { line: generated.line, lang: generated.lang ?? fallbackLang, source: 'haiku' }
+    log($, s, `haiku: ${generated.reason}, pula awaryjna`)
+  }
+
+  const picked = pickFallback(fallbackLang, situation, s.intensity, s.recent)
+  return { line: withName(picked.line, name), lang: picked.lang, source: 'pula' }
+}
+
+function mayGenerate(s) {
+  const hourAgo = Date.now() - 3600_000
+  while (s.generatedAt.length > 0 && s.generatedAt[0] < hourAgo) s.generatedAt.shift()
+  if (s.generatedAt.length >= GENERATIONS_PER_HOUR) return false
+  s.generatedAt.push(Date.now())
+  return true
+}
+
+// Naraz jedno zdanie; zdarzenie w trakcie mówienia zastępuje czekające.
+async function say($, s, line, lang) {
+  if (s.isSpeaking) {
+    s.pending = { line, lang }
+    return
+  }
+  s.isSpeaking = true
+  try {
+    s.platform ??= await detectPlatform($)
+    const result = await speak($, s.platform, line, lang)
+    log($, s, `🔊 [${lang}, ${result.voice ?? 'domyślny głos'}] ${line}`)
+    if (result.missingVoice && !s.hinted.has(lang)) {
+      s.hinted.add(lang)
+      $.ui.toast(voiceHint(s.platform, lang), { timeoutMs: 12000 })
+    }
+  } catch (error) {
+    log($, s, `synteza mowy nie działa: ${error?.message ?? error}`)
+  } finally {
+    s.isSpeaking = false
+  }
+  const next = s.pending
+  s.pending = undefined
+  if (next && !s.isMuted) await say($, s, next.line, next.lang)
+}
+
+// Windows po zmiennej OS, macOS po działającym `say`, reszta to Linux.
+async function detectPlatform($) {
+  if ((await $.env.get('OS')) === 'Windows_NT') return { os: 'windows' }
+  const voices = await $.process
+    .run(['say', '-v', '?'], { timeoutMs: 5000 })
+    .then(r => (r.exitCode === 0 ? parseSayVoices(r.stdout) : undefined))
+    .catch(() => undefined)
+  return voices ? { os: 'mac', voices } : { os: 'linux' }
+}
+
+async function speak($, platform, line, lang) {
+  let lastError = 'no speech synthesizer'
+  for (const attempt of speechAttempts(platform, line, lang)) {
+    const r = await $.process
+      .run(attempt.argv, { stdin: attempt.stdin, timeoutMs: SPEECH_TIMEOUT_MS })
+      .catch(error => ({ exitCode: -1, stdout: '', stderr: String(error?.message ?? error) }))
+    if (r.exitCode === 0) return speechOutcome(attempt, r.stdout)
+    lastError = `${attempt.argv[0]} exit ${r.exitCode}: ${r.stderr.slice(0, 200)}`
+  }
+  throw new Error(lastError)
+}
+
+async function runTest($, s, args) {
+  if (!s.hasConsent) return { text: 'Abusive Agent milczy: brak zgody 18+ (adult_consent). Włącz ją w konfiguracji pluginu.' }
+  const asked = args.trim()
+  const situation = SITUATIONS.includes(asked) ? asked : 'done'
+  const messages = await $.session.messages().catch(() => [])
+  const answer = [...messages].reverse().find(m => m.role === 'assistant' && m.text)?.text ?? ''
+  const { line, lang, source } = await compose($, s, situation, answer)
+  $.clock.after(0, () => {
+    say($, s, line, lang).catch(error => log($, s, `błąd: ${error?.message ?? error}`))
+  })
+  return { text: `🔊 (${situation}, ${lang}, ${source}) ${line}${s.isMuted ? ' — sesja wyciszona, ale test mówi' : ''}` }
+}
+
+async function toggleContext($, s) {
+  s.isContextOn = !s.isContextOn
+  await $.store.set('context', s.isContextOn)
+  return {
+    text: s.isContextOn
+      ? 'Abusive Agent: komentuję treść zadania (do haiku idzie fragment prośby i odpowiedzi).'
+      : 'Abusive Agent: teksty ogólne, nic z rozmowy nie trafia do dodatkowego zapytania.',
+  }
+}
+
+async function toggleIdle($, s) {
+  s.isIdleOn = !s.isIdleOn
+  await $.store.set('idle', s.isIdleOn)
+  return { text: s.isIdleOn ? 'Abusive Agent: odzywam się przy bezczynności.' : 'Abusive Agent: przy bezczynności milczę.' }
+}
+
+function log($, s, text) {
+  $.ui.log(text, { to: s.isDebug ? 'transcript' : 'debug' })
+}

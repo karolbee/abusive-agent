@@ -1,0 +1,40 @@
+{
+  "name": "abusive-agent",
+  "displayName": "Abusive Agent (18+)",
+  "version": "0.1.0",
+  "description": "Wulgarne komunikaty głosowe po każdej turze Claude Code, przez systemowy syntezator mowy. Tylko dla dorosłych.",
+  "author": { "name": "Karol Wegner" },
+  "homepage": "https://github.com/karolbee/abusive-agent",
+  "repository": "https://github.com/karolbee/abusive-agent",
+  "license": "MIT",
+  "keywords": ["voice", "tts", "fun", "18+"],
+  "outputStyles": "./output-styles/",
+  "userConfig": {
+    "adult_consent": {
+      "type": "boolean",
+      "title": "Mam 18+ i zgadzam się na wulgarny język",
+      "description": "Bez tej zgody plugin milczy.",
+      "default": false
+    },
+    "language": {
+      "type": "string",
+      "title": "Język komunikatów",
+      "description": "auto = język, w którym piszesz do Claude",
+      "options": ["auto", "polski", "English", "Deutsch", "Español", "Français", "Italiano"],
+      "default": "auto"
+    },
+    "intensity": {
+      "type": "string",
+      "title": "Ostrość",
+      "description": "Jak bardzo ma przeklinać",
+      "options": ["łagodnie", "ostro", "hardkor"],
+      "default": "ostro"
+    },
+    "names": {
+      "type": "string",
+      "title": "Jak mam się do ciebie zwracać?",
+      "description": "Imiona i ksywki po przecinku, np. Karol, Karolek, szefie. Puste = bez imienia.",
+      "default": ""
+    }
+  }
+}

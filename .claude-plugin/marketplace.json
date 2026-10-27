@@ -1,0 +1,12 @@
+{
+  "name": "karolbee",
+  "owner": { "name": "Karol" },
+  "description": "Pluginy Karola do Claude Code.",
+  "plugins": [
+    {
+      "name": "abusive-agent",
+      "source": "./",
+      "description": "Wulgarne komunikaty głosowe po każdej turze Claude Code (18+)."
+    }
+  ]
+}
