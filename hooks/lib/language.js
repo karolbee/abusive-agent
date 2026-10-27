@@ -26,6 +26,40 @@ export function languageFromConfig(value) {
   return FROM_CONFIG[value] ?? 'auto'
 }
 
+const LANGUAGE_ALIASES = {
+  auto: 'auto',
+  automatycznie: 'auto',
+  pl: 'polski',
+  polski: 'polski',
+  polish: 'polski',
+  en: 'English',
+  english: 'English',
+  angielski: 'English',
+  de: 'Deutsch',
+  deutsch: 'Deutsch',
+  german: 'Deutsch',
+  niemiecki: 'Deutsch',
+  es: 'Español',
+  español: 'Español',
+  espanol: 'Español',
+  spanish: 'Español',
+  hiszpański: 'Español',
+  fr: 'Français',
+  français: 'Français',
+  francais: 'Français',
+  french: 'Français',
+  francuski: 'Français',
+  it: 'Italiano',
+  italiano: 'Italiano',
+  italian: 'Italiano',
+  włoski: 'Italiano',
+}
+
+// Odpowiedź z /abusive-config (wybrana albo wpisana) → wartość pola `language`.
+export function languageChoice(answer) {
+  return LANGUAGE_ALIASES[String(answer ?? '').trim().toLocaleLowerCase()]
+}
+
 const HINTS = {
   pl: { chars: /[ąćęłńśźż]/gi, words: /\b(nie|jest|się|że|na|co|jak|czy|mi|mnie|zrób|proszę|dlaczego|tak|ale|już|teraz|tutaj|żeby|może)\b/gi },
   de: { chars: /[äöüß]/gi, words: /\b(und|nicht|ich|ist|das|die|der|bitte|mit|warum|ein|eine|auch|noch|kannst)\b/gi },

@@ -5,8 +5,8 @@
 // Każde wywołanie `$` siedzi w tym pliku, w funkcjach najwyższego poziomu;
 // lib/ to czyste funkcje bez dostępu do silnika.
 
-import { cleanText, detectLanguage, languageFromConfig, lastUserText, parseNames } from './lib/language.js'
-import { intensityFromConfig, isSafeLine, lineFromReply, lineRequest, pickFallback, SITUATIONS, withName } from './lib/lines.js'
+import { cleanText, detectLanguage, languageChoice, languageFromConfig, lastUserText, parseNames } from './lib/language.js'
+import { intensityChoice, intensityFromConfig, isSafeLine, lineFromReply, lineRequest, pickFallback, SITUATIONS, withName } from './lib/lines.js'
 import { parseSayVoices, speechAttempts, speechOutcome, SPEECH_TIMEOUT_MS, voiceHint } from './lib/speak.js'
 
 const DEDUPE_MS = 5000
@@ -17,14 +17,16 @@ const COMMANDS = [
   { name: 'abusive-mute', description: 'Abusive Agent: wycisz albo odcisz głos w tej sesji', immediate: true },
   { name: 'abusive-context', description: 'Abusive Agent: włącz/wyłącz komentowanie treści zadania (tryb kontekstowy)' },
   { name: 'abusive-idle', description: 'Abusive Agent: włącz/wyłącz komunikat przy bezczynności' },
+  { name: 'abusive-config', description: 'Abusive Agent: ustaw od nowa zgodę 18+, język, ostrość i imiona' },
 ]
 
 export function register(on, options) {
   const s = {
-    hasConsent: options.adult_consent === true,
-    configLang: languageFromConfig(options.language),
-    intensity: intensityFromConfig(options.intensity),
-    names: parseNames(options.names),
+    options: {},
+    hasConsent: false,
+    configLang: 'auto',
+    intensity: 'strong',
+    names: [],
     isHeadless: false,
     isMuted: false,
     isContextOn: true,
@@ -32,6 +34,7 @@ export function register(on, options) {
     isDebug: false,
     hasToldConsent: false,
     hasPermissionRequest: false,
+    isConfiguring: false,
     platform: undefined,
     isSpeaking: false,
     pending: undefined,
@@ -40,6 +43,7 @@ export function register(on, options) {
     hinted: new Set(),
     generatedAt: [],
   }
+  applyOptions(s, options)
 
   on('session.start', async ($, e, next) => {
     await start($, s, e)
@@ -51,8 +55,9 @@ export function register(on, options) {
     return next(e)
   })
 
+  // Pytania z /abusive-config też przechodzą tędy; przy nich milczy.
   on('tool.call', { tool: 'AskUserQuestion' }, ($, e, next) => {
-    if (e.agentId === undefined) trigger($, s, 'question', '')
+    if (e.agentId === undefined && !s.isConfiguring) trigger($, s, 'question', '')
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -83,6 +88,16 @@ export function register(on, options) {
   on('command.run', { command: 'abusive-context' }, $ => toggleContext($, s))
 
   on('command.run', { command: 'abusive-idle' }, $ => toggleIdle($, s))
+
+  on('command.run', { command: 'abusive-config' }, $ => reconfigure($, s))
+}
+
+function applyOptions(s, options) {
+  s.options = { ...options }
+  s.hasConsent = options.adult_consent === true
+  s.configLang = languageFromConfig(options.language)
+  s.intensity = intensityFromConfig(options.intensity)
+  s.names = parseNames(options.names)
 }
 
 async function start($, s, e) {
@@ -237,6 +252,63 @@ async function toggleIdle($, s) {
   s.isIdleOn = !s.isIdleOn
   await $.store.set('idle', s.isIdleOn)
   return { text: s.isIdleOn ? 'Abusive Agent: odzywam się przy bezczynności.' : 'Abusive Agent: przy bezczynności milczę.' }
+}
+
+// Zadaje od nowa pytania z instalacji. Zapisuje dopiero po ostatniej odpowiedzi,
+// więc zamknięte okno niczego nie zmienia.
+async function reconfigure($, s) {
+  const now = s.options
+  const answers = {}
+  s.isConfiguring = true
+  try {
+    const consent = await $.ui.ask('Masz ukończone 18 lat i zgadzasz się na wulgarny język?', {
+      options: ['Tak, mam 18+', 'Nie'],
+      header: 'Zgoda 18+',
+    })
+    answers.adult_consent = consent.startsWith('Tak')
+
+    if (answers.adult_consent) {
+      const language = await $.ui.ask(
+        `Teraz: ${now.language ?? 'auto'}. W jakim języku mam gadać (inny wpisz niżej: Español, Français, Italiano)?`,
+        { options: ['auto', 'English', 'polski', 'Deutsch'], header: 'Język' },
+      )
+      answers.language = languageChoice(language) ?? now.language ?? 'auto'
+
+      const intensity = await $.ui.ask(`Teraz: ${now.intensity ?? 'ostro'}. Jak ostro mam przeklinać?`, {
+        options: ['łagodnie', 'ostro', 'hardkor'],
+        header: 'Ostrość',
+      })
+      answers.intensity = intensityChoice(intensity) ?? now.intensity ?? 'ostro'
+
+      const current = parseNames(now.names).join(', ')
+      const names = await $.ui.ask(
+        `${current ? `Teraz: ${current}. ` : ''}Jak mam się do ciebie zwracać (imiona po przecinku wpisz niżej)?`,
+        { options: current ? ['Zostaw obecne', 'Bez imion'] : ['Bez imion', 'boss'], header: 'Imiona' },
+      )
+      answers.names = names === 'Zostaw obecne' ? current : names === 'Bez imion' ? '' : parseNames(names).join(', ')
+    }
+  } catch {
+    return { text: 'Abusive Agent: konfiguracja przerwana, nic nie zmieniłem.' }
+  } finally {
+    s.isConfiguring = false
+  }
+
+  const rows = await $.config.list().catch(() => [])
+  const failed = []
+  for (const [field, value] of Object.entries(answers)) {
+    const key = rows.find(row => row.key.startsWith('abusive-agent') && row.key.endsWith(`.${field}`))?.key
+    const result = key
+      ? await $.config.set({ key, value }).catch(error => ({ deny: String(error?.message ?? error) }))
+      : { deny: 'nie ma tego pola w /config' }
+    if (result.deny) failed.push(`${field}: ${result.deny}`)
+  }
+  applyOptions(s, { ...now, ...answers })
+
+  const summary = answers.adult_consent
+    ? `zgoda 18+ jest, język: ${answers.language}, ostrość: ${answers.intensity}, imiona: ${answers.names || 'bez imion'}`
+    : 'bez zgody 18+ milczę'
+  const problems = failed.length > 0 ? ` Nie zapisałem na stałe: ${failed.join('; ')}.` : ''
+  return { text: `Abusive Agent: ${summary}.${problems}${answers.adult_consent ? ' Sprawdź: /abusive-test' : ''}` }
 }
 
 function log($, s, text) {

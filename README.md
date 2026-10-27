@@ -41,12 +41,13 @@ Działa od następnej sesji (w otwartej sesji w terminalu: `/reload-plugins`).
 | Ostrość | `intensity` | łagodnie, ostro, hardkor | ostro |
 | Jak mam się do ciebie zwracać? | `names` | imiona i ksywki po przecinku, np. `Karol, Karolek, szefie` | puste (bez imienia) |
 
-Zmienisz je później przez `/plugin configure abusive-agent@karolbee`, w `/config` albo ponownym `claude plugin install ... --config klucz=wartość`.
+Zmienisz je później najprościej komendą `/abusive-config`, która zadaje te pytania jeszcze raz. Działa też `/plugin configure abusive-agent@karolbee`, `/config` albo ponowne `claude plugin install ... --config klucz=wartość`.
 
 ## Komendy
 
 | Komenda | Co robi |
 | --- | --- |
+| `/abusive-config` | zadaje od nowa pytania z instalacji (zgoda 18+, język, ostrość, imiona) i zapisuje odpowiedzi; zamknięte okno niczego nie zmienia |
 | `/abusive-test [done\|question\|permission\|idle\|error]` | mówi od razu przykładowy tekst i pokazuje go na ekranie |
 | `/abusive-mute` | wycisza / odcisza głos w bieżącej sesji (działa też w trakcie tury) |
 | `/abusive-context` | włącza / wyłącza komentowanie treści zadania (tryb kontekstowy, domyślnie włączony) |

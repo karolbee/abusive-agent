@@ -14,6 +14,12 @@ export function intensityFromConfig(value) {
   return { łagodnie: 'mild', ostro: 'strong', hardkor: 'hardcore' }[value] ?? 'strong'
 }
 
+// Odpowiedź z /abusive-config (wybrana albo wpisana) → wartość pola `intensity`.
+export function intensityChoice(answer) {
+  const word = String(answer ?? '').trim().toLocaleLowerCase()
+  return { łagodnie: 'łagodnie', mild: 'łagodnie', ostro: 'ostro', strong: 'ostro', hardkor: 'hardkor', hardcore: 'hardkor' }[word]
+}
+
 const INTENSITY_RULES = {
   mild: 'mild: only soft curses, no f-words, no "kurwa"',
   strong: 'strong: juicy, colorful profanity two or three times in the line, varied, never the same swear twice',

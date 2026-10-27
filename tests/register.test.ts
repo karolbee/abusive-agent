@@ -17,13 +17,18 @@ type World = {
   env?: Record<string, string>
   reply?: unknown
   sayVoices?: string
+  asks?: string[]
 }
 
+const FIELDS = ['adult_consent', 'language', 'intensity', 'names']
+
 // The world beneath the plugin: each hook answers the way the engine would.
-function world(on: On, { env = WINDOWS, reply, sayVoices }: World = {}) {
+function world(on: On, { env = WINDOWS, reply, sayVoices, asks }: World = {}) {
   const runs: Run[] = []
   const prompts: string[] = []
   const toasts: string[] = []
+  const questions: string[] = []
+  const saved: Record<string, unknown> = {}
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, env)
@@ -47,12 +52,34 @@ function world(on: On, { env = WINDOWS, reply, sayVoices }: World = {}) {
   on('turn.complete', (_, e) => ({ text: e.answer }))
   on('classic.Notification', () => ({}))
   on('classic.PermissionRequest', () => ({}))
-  on('tool.call', () => ({ result: { answers: {} } }))
+  on('tool.call', (_, e) => {
+    if (!asks || e.tool !== 'AskUserQuestion') return { result: { answers: {} } }
+    // $.ui.ask: the person picks the next answer, or closes the dialog when none is left.
+    const question = e.questions[0].question
+    questions.push(question)
+    const answer = asks[questions.length - 1]
+    if (answer === undefined) return { deny: 'closed' }
+    return { result: { questions: e.questions, answers: { [question]: answer } } }
+  })
+  on('config.list', () => ({
+    value: FIELDS.map(field => ({
+      key: `abusive-agent.${field}`,
+      label: field,
+      kind: field === 'adult_consent' ? ('boolean' as const) : ('text' as const),
+      value: '',
+      provider: { plugin: 'abusive-agent', tier: 'user' as const },
+      isLocked: false,
+    })),
+  }))
+  on('config.set', (_, e) => {
+    saved[e.key] = e.value
+    return { value: e.value }
+  })
 
   const flush = async () => {
     for (let i = 0; i < 5; i++) await clock.settle()
   }
-  return { runs, prompts, toasts, flush }
+  return { runs, prompts, toasts, questions, saved, flush }
 }
 
 function decodeBase64(text: string): number[] {
@@ -242,6 +269,49 @@ describe('czekanie na użytkownika', () => {
     const { text } = spokenOnWindows(speech(w.runs)[0])
     const rest = text.slice('Karol, '.length)
     expect(pl.strong.question.some((line: string) => line.charAt(0).toLowerCase() + line.slice(1) === rest)).toBe(true)
+  })
+})
+
+describe('/abusive-config', () => {
+  test('pyta od nowa i zapisuje odpowiedzi, a następne zdanie idzie po nowemu', { options: CONSENT }, async ($, on) => {
+    const w = world(on, { asks: ['Tak, mam 18+', 'angielski', 'hardkor', 'Karol, boss'] })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    const { text } = await $.command.run({ command: 'abusive-config' })
+
+    expect(w.questions).toHaveLength(4)
+    expect(w.saved).toEqual({
+      'abusive-agent.adult_consent': true,
+      'abusive-agent.language': 'English',
+      'abusive-agent.intensity': 'hardkor',
+      'abusive-agent.names': 'Karol, boss',
+    })
+    expect(text).toContain('ostrość: hardkor')
+
+    await $.turn.complete({ ...TURN, answer: ANSWER })
+    await w.flush()
+    expect(w.prompts[0]).toContain('Write the line in English')
+    expect(w.prompts[0]).toContain('maximum filth')
+  })
+
+  test('zamknięte okno niczego nie zmienia', { options: CONSENT }, async ($, on) => {
+    const w = world(on, { asks: ['Tak, mam 18+', 'English'] })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    const { text } = await $.command.run({ command: 'abusive-config' })
+
+    expect(w.questions).toHaveLength(3)
+    expect(w.saved).toEqual({})
+    expect(text).toContain('nic nie zmieniłem')
+  })
+
+  test('bez zgody zapisuje tylko jej brak i milknie', { options: CONSENT }, async ($, on) => {
+    const w = world(on, { asks: ['Nie'] })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await $.command.run({ command: 'abusive-config' })
+    await $.turn.complete({ ...TURN, answer: ANSWER })
+    await w.flush()
+
+    expect(w.saved).toEqual({ 'abusive-agent.adult_consent': false })
+    expect(w.runs).toHaveLength(0)
   })
 })
 
