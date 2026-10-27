@@ -1,7 +1,7 @@
 {
   "name": "abusive-agent",
   "displayName": "Abusive Agent (18+)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Wulgarne komunikaty głosowe po każdej turze Claude Code, przez systemowy syntezator mowy. Tylko dla dorosłych.",
   "author": { "name": "Karol Wegner" },
   "homepage": "https://github.com/karolbee/abusive-agent",

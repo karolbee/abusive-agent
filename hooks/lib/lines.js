@@ -15,9 +15,28 @@ export function intensityFromConfig(value) {
 }
 
 const INTENSITY_RULES = {
-  mild: 'mild: only soft curses (damn, hell, crap; in Polish "do cholery", "psia kość", "kurczę"), no f-words, no "kurwa"',
-  strong: 'strong: real profanity (fuck, shit; in Polish "kurwa", "chuj", "ja pierdolę") once or twice in the line',
-  hardcore: 'hardcore: heavy, crude, over-the-top profanity in every clause, still inside the boundaries below',
+  mild: 'mild: only soft curses, no f-words, no "kurwa"',
+  strong: 'strong: juicy, colorful profanity two or three times in the line, varied, never the same swear twice',
+  hardcore: 'hardcore: maximum filth, a swear in every clause, stacked and creative, still inside the boundaries below',
+}
+
+// Przykłady przekleństw i tonu w języku zdania, żeby polskie nie wpadały do angielskiego.
+const SWEARS = {
+  en: {
+    mild: 'damn, hell, crap, for crying out loud',
+    strong: 'fuck, fucking, shit, goddamn, bullshit, hauling ass',
+    hardcore: 'fucking, motherfucking, goddamn, shit-for-brains, son of a bitch, busting my ass',
+  },
+  pl: {
+    mild: '"do cholery", "psia kość", "kurczę"',
+    strong: '"kurwa", "chuj", "ja pierdolę", "zapierdalam"',
+    hardcore: '"kurwa mać", "ja pierdolę", "zapierdalam jak dziki", "chuj z tym"',
+  },
+}
+
+const TONE = {
+  en: 'Done, boss, your fucking login page is up. I am hauling ass here, what else do you want from me?',
+  pl: 'Szefie, kurwa, zrobione, zapierdalam jak dziki, czego ty jeszcze ode mnie chcesz?',
 }
 
 const SITUATION_TEXT = {
@@ -31,10 +50,10 @@ const SITUATION_TEXT = {
 const SYSTEM = [
   'You write exactly one spoken line for a comedic, foul-mouthed coding agent.',
   'The line is read aloud by a speech synthesizer to an adult user who explicitly opted in (18+) to vulgar language.',
-  'The agent speaks in the first person, like a cocky, swearing coworker reacting to the situation.',
+  'The agent speaks in the first person, like an overworked, cocky, foul-mouthed coworker: it brags that it is hauling ass for the user and snaps back at being bossed around ("what the fuck do you want from me now?").',
   'Rules:',
-  '- One sentence (two very short ones at most), at most 18 words, natural to say out loud.',
-  '- No emoji, markdown, code, file paths, URLs or symbols; say names of things as plain words.',
+  '- One or two short sentences, at most 22 words in total (hard limit), natural to say out loud, with attitude.',
+  '- No emoji, markdown, code, function or file names, paths, URLs or symbols; say names of things as plain words ("the NIP validator", not "validateNip in src/nip.ts").',
   '- When a task is given, comment on its actual topic by name: mock it, brag about it, or tease the user about what they will do with it next.',
   '- Boundaries: no slurs or insults about any group (origin, religion, sexuality, gender, disability), no sexual content, no threats or violence, no jokes about self-harm or suicide. Swearing aims at the situation and the task; at most a light jab at the user, never at who they are.',
   'Reply with JSON only, no prose: {"lang":"<ISO 639-1 code of the line>","line":"<the line>"}',
@@ -47,11 +66,16 @@ function excerpt(text, max) {
 
 export function buildPrompt(ctx) {
   const parts = [`Situation: ${SITUATION_TEXT[ctx.situation] ?? SITUATION_TEXT.done}`]
-  parts.push(`Swearing level: ${INTENSITY_RULES[ctx.intensity] ?? INTENSITY_RULES.strong}`)
+  const level = INTENSITY_RULES[ctx.intensity] ? ctx.intensity : 'strong'
 
   const known = ctx.lang !== 'auto' ? ctx.lang : ctx.guessLang
-  if (known) parts.push(`Write the line in ${LANGUAGE_NAMES[known] ?? known}.`)
-  else parts.push(`Write the line in the language of the user's request below (if unclear, ${LANGUAGE_NAMES[ctx.fallbackLang] ?? 'English'}).`)
+  const examples = known === 'pl' ? ['pl'] : known ? ['en'] : ['en', 'pl']
+  const swears = examples.map(lang => `${LANGUAGE_NAMES[lang]}: ${SWEARS[lang][level]}`).join('; ')
+  parts.push(`Swearing level: ${INTENSITY_RULES[level]} (for example, ${swears})`)
+  if (level !== 'mild') parts.push(`Tone example, do not copy it: ${examples.map(lang => `"${TONE[lang]}"`).join(' / ')}`)
+
+  if (known) parts.push(`Write the line in ${LANGUAGE_NAMES[known] ?? known}, swearing only in that language${known === 'en' || known === 'pl' ? '' : ' (use its natural equivalents of the examples)'}.`)
+  else parts.push(`Write the line in the language of the user's request below (if unclear, ${LANGUAGE_NAMES[ctx.fallbackLang] ?? 'English'}), swearing only in that language.`)
 
   if (ctx.name) parts.push(`Address the user as "${ctx.name}" (use the natural form of that name in the line's language, e.g. the vocative).`)
 
