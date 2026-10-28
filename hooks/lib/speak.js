@@ -77,12 +77,11 @@ export function windowsArgv(text, lang, options) {
   return powershellArgv(windowsScript(text, lang, options))
 }
 
-// Folder pluginu w danych użytkownika: tu leżą piper/ i voices/.
+// Folder pluginu w katalogu domowym: tu leżą piper/ i voices/. Na Windowsie nie
+// w AppData, bo aplikacja desktop (MSIX) przekierowuje tam zapisy do swojego folderu.
 export function dataDir(os, env) {
-  if (os === 'windows') return env.LOCALAPPDATA ? `${env.LOCALAPPDATA}\\abusive-agent` : undefined
-  if (!env.HOME) return undefined
-  if (os === 'mac') return `${env.HOME}/Library/Application Support/abusive-agent`
-  return `${env.XDG_DATA_HOME || `${env.HOME}/.local/share`}/abusive-agent`
+  const home = os === 'windows' ? env.USERPROFILE : env.HOME
+  return home ? joinPath(os, home, '.abusive-agent') : undefined
 }
 
 export function joinPath(os, ...parts) {

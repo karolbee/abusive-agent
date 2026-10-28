@@ -346,14 +346,14 @@ describe('macOS', () => {
   })
 })
 
-const LOCAL = 'C:\\Users\\t\\AppData\\Local'
-const DIR = `${LOCAL}\\abusive-agent`
+const PROFILE = 'C:\\Users\\t'
+const DIR = `${PROFILE}\\.abusive-agent`
 const PIPER = `${DIR}\\piper\\piper.exe`
 const VOICE_FILES = ['en_GB-alan-medium.onnx', 'en_GB-alan-medium.onnx.json', 'en_US-joe-medium.onnx', 'en_US-joe-medium.onnx.json', 'pl_PL-mc_speech-medium.onnx']
 const ENGLISH = { ...CONSENT, language: 'English', piper_voices: 'en_US-joe-medium' }
 const ENGLISH_LINE = 'Done, boss, your fucking parser works.'
 const ENGLISH_REPLY = { isAnswered: true, text: JSON.stringify({ lang: 'en', line: ENGLISH_LINE }), usage: USAGE }
-const PIPER_WORLD = { env: { ...WINDOWS, LOCALAPPDATA: LOCAL }, files: { [`${DIR}\\voices`]: VOICE_FILES }, exists: [PIPER] }
+const PIPER_WORLD = { env: { ...WINDOWS, USERPROFILE: PROFILE }, files: { [`${DIR}\\voices`]: VOICE_FILES }, exists: [PIPER] }
 
 describe('Piper', () => {
   test('mówi ulubionym głosem Pipera i gra WAV odtwarzaczem systemu', { options: ENGLISH }, async ($, on) => {

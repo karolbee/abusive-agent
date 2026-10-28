@@ -81,10 +81,7 @@ Mod mówi wtedy domyślnym głosem i raz pokazuje, jak doinstalować właściwy:
 
 Głosy systemowe brzmią jak automat z dworca. [Piper](https://github.com/rhasspy/piper) to darmowy syntezator neuronowy, który działa lokalnie i bez internetu: 5 sekund mowy generuje w około 0,3 s. Gdy go zainstalujesz, mod mówi nim, a przy każdym problemie wraca do głosu systemowego.
 
-1. **Folder pluginu** (utwórz go):
-   - Windows: `%LOCALAPPDATA%\abusive-agent\`
-   - macOS: `~/Library/Application Support/abusive-agent/`
-   - Linux: `~/.local/share/abusive-agent/`
+1. **Folder pluginu** (utwórz go): `~/.abusive-agent/` w katalogu domowym, na Windowsie `%USERPROFILE%\.abusive-agent\`. Nie w `AppData`: aplikacja desktop Claude przekierowuje tam zapisy do swojego prywatnego folderu i Claude Code w terminalu ich nie widzi.
 2. **Program:** rozpakuj [wydanie Pipera](https://github.com/rhasspy/piper/releases/tag/2023.11.14-2) dla swojego systemu do podfolderu `piper/` (tak, żeby był `piper/piper.exe` albo `piper/piper`). Może też leżeć gdzie indziej: wtedy podaj ścieżkę w `piper_path` albo dodaj go do `PATH`.
 3. **Głosy:** z [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices/tree/main) pobierz parę plików `<głos>.onnx` i `<głos>.onnx.json` do podfolderu `voices/`. Niskie męskie głosy, które brzmią dobrze: `en_US-joe-medium` (angielski) i `pl_PL-mc_speech-medium` (polski).
 4. **Wybór głosu:** wpisz ulubione w `piper_voices`, np. `en_US-joe-medium, pl_PL-mc_speech-medium`. Mod bierze głos w języku zdania, a gdy żadnego nie ma, mówi systemowym.

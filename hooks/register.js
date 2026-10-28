@@ -231,23 +231,29 @@ async function detectPlatform($, s) {
   return { ...platform, piper: await detectPiper($, s, platform.os) }
 }
 
-// Piper jest w grze, gdy w <dane>/abusive-agent/voices leży choć jeden głos.
+// Piper jest w grze, gdy w ~/.abusive-agent/voices leży choć jeden głos.
 // Program: ścieżka z konfiguracji, potem piper/ obok głosów, potem `piper` z PATH.
 async function detectPiper($, s, os) {
-  const env = {
-    LOCALAPPDATA: await $.env.get('LOCALAPPDATA'),
-    HOME: await $.env.get('HOME'),
-    XDG_DATA_HOME: await $.env.get('XDG_DATA_HOME'),
-  }
+  const env = { USERPROFILE: await $.env.get('USERPROFILE'), HOME: await $.env.get('HOME') }
   const dir = dataDir(os, env)
-  if (!dir) return undefined
+  if (!dir) {
+    log($, s, 'Piper: nie znam folderu danych użytkownika, mówię głosem systemowym')
+    return undefined
+  }
   const voicesDir = joinPath(os, dir, 'voices')
-  const entries = await $.fs.list(voicesDir).catch(() => [])
+  const entries = await $.fs.list(voicesDir).catch(error => {
+    log($, s, `Piper: nie czytam ${voicesDir} (${error?.message ?? error}), mówię głosem systemowym`)
+    return []
+  })
   const voices = piperVoices(entries.map(entry => entry.name))
-  if (voices.length === 0) return undefined
+  if (voices.length === 0) {
+    if (entries.length > 0) log($, s, `Piper: w ${voicesDir} nie ma par .onnx + .onnx.json`)
+    return undefined
+  }
   const configured = String(s.options.piper_path ?? '').trim()
   const bundled = joinPath(os, dir, 'piper', os === 'windows' ? 'piper.exe' : 'piper')
   const path = configured || ((await $.fs.exists(bundled).catch(() => false)) ? bundled : 'piper')
+  log($, s, `Piper: ${path}, głosy: ${voices.join(', ')}`)
   return { os, path, dir, voicesDir, voices, preferred: parseVoiceList(s.options.piper_voices) }
 }
 

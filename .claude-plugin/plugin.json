@@ -1,7 +1,7 @@
 {
   "name": "abusive-agent",
   "displayName": "Abusive Agent (18+)",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Wulgarne komunikaty głosowe po każdej turze Claude Code, przez Pipera albo systemowy syntezator mowy. Tylko dla dorosłych.",
   "author": { "name": "Karol Wegner" },
   "homepage": "https://github.com/karolbee/abusive-agent",
@@ -39,13 +39,13 @@
     "piper_voices": {
       "type": "string",
       "title": "Głosy Pipera (opcjonalnie)",
-      "description": "Ulubione głosy po przecinku, np. en_US-joe-medium, pl_PL-mc_speech-medium. Pliki .onnx i .onnx.json leżą w folderze abusive-agent/voices (szczegóły w README). Puste = pierwszy głos w danym języku.",
+      "description": "Ulubione głosy po przecinku, np. en_US-joe-medium, pl_PL-mc_speech-medium. Pliki .onnx i .onnx.json leżą w folderze ~/.abusive-agent/voices (szczegóły w README). Puste = pierwszy głos w danym języku.",
       "default": ""
     },
     "piper_path": {
       "type": "string",
       "title": "Program Piper (opcjonalnie)",
-      "description": "Pełna ścieżka do programu piper. Puste = abusive-agent/piper/ obok głosów, a potem piper z PATH.",
+      "description": "Pełna ścieżka do programu piper. Puste = ~/.abusive-agent/piper/ obok głosów, a potem piper z PATH.",
       "default": ""
     }
   }
