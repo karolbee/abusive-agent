@@ -40,6 +40,8 @@ Działa od następnej sesji (w otwartej sesji w terminalu: `/reload-plugins`).
 | Język komunikatów | `language` | auto, polski, English, Deutsch, Español, Français, Italiano | auto (język, w którym piszesz) |
 | Ostrość | `intensity` | łagodnie, ostro, hardkor | ostro |
 | Jak mam się do ciebie zwracać? | `names` | imiona i ksywki po przecinku, np. `Karol, Karolek, szefie` | puste (bez imienia) |
+| Głosy Pipera (opcjonalnie) | `piper_voices` | ulubione głosy po przecinku, np. `en_US-joe-medium, pl_PL-mc_speech-medium` | puste (pierwszy głos w danym języku) |
+| Program Piper (opcjonalnie) | `piper_path` | pełna ścieżka do programu `piper` | puste (szuka sam, patrz [Lepszy głos: Piper](#lepszy-głos-piper)) |
 
 Zmienisz je później najprościej komendą `/abusive-config`, która zadaje te pytania jeszcze raz. Działa też `/plugin configure abusive-agent@karolbee`, `/config` albo ponowne `claude plugin install ... --config klucz=wartość`.
 
@@ -61,7 +63,7 @@ To plugin z **modem**: kod JavaScript (`hooks/register.js`), który Claude Code 
 
 1. **Koniec tury** (`turn.complete`): mod bierze fragment twojej ostatniej prośby (do 300 znaków) i odpowiedzi agenta (do 500 znaków) i prosi **haiku** o jedno zdanie, które komentuje to zadanie. Wywołanie idzie na twoim koncie (plan albo klucz API), bez dodatkowego klucza; to kilkaset tokenów haiku na turę, limit 60 na godzinę.
 2. **Zgoda na komendę, pytanie, bezczynność** (`classic.Notification`, `classic.PermissionRequest`, `AskUserQuestion`): tekst z gotowej puli, od razu i bez modelu.
-3. **Mowa**: systemowy syntezator, bez płatnych usług TTS. macOS `say` (głos wybrany po języku, np. Zosia), Windows SAPI `System.Speech` (np. Microsoft Paulina), awaryjnie WinRT, Linux `espeak-ng` / `spd-say`. Program jest uruchamiany listą argumentów, bez powłoki, a na Windowsie tekst siedzi w skrypcie jako base64, więc tekst z modelu nie może wstrzyknąć komendy.
+3. **Mowa**: najpierw [Piper](#lepszy-głos-piper), jeśli go zainstalujesz; inaczej systemowy syntezator, bez płatnych usług TTS. macOS `say` (głos wybrany po języku, np. Zosia), Windows SAPI `System.Speech` (np. Microsoft Paulina), awaryjnie WinRT, Linux `espeak-ng` / `spd-say`. Program jest uruchamiany listą argumentów, bez powłoki, a na Windowsie tekst siedzi w skrypcie jako base64, więc tekst z modelu nie może wstrzyknąć komendy.
 4. **Awaria**: gdy model nie odpowie, odmówi albo nie ma sieci, leci tekst z puli offline (`hooks/lib/fallback/`, polski i angielski).
 5. **Granice**: prompt zabrania obelg wobec grup (pochodzenie, religia, orientacja, płeć, niepełnosprawność), treści seksualnych, gróźb i żartów o samookaleczeniu, a filtr słów zakazanych sprawdza każdy tekst przed głośnikiem.
 
@@ -74,6 +76,20 @@ Mod mówi wtedy domyślnym głosem i raz pokazuje, jak doinstalować właściwy:
 - **Windows:** Ustawienia → Czas i język → Mowa → Dodaj głosy
 - **macOS:** Ustawienia systemowe → Dostępność → Treść mówiona → Głos systemowy → Zarządzaj głosami
 - **Linux:** `apt install espeak-ng` (albo odpowiednik w twojej dystrybucji)
+
+### Lepszy głos: Piper
+
+Głosy systemowe brzmią jak automat z dworca. [Piper](https://github.com/rhasspy/piper) to darmowy syntezator neuronowy, który działa lokalnie i bez internetu: 5 sekund mowy generuje w około 0,3 s. Gdy go zainstalujesz, mod mówi nim, a przy każdym problemie wraca do głosu systemowego.
+
+1. **Folder pluginu** (utwórz go):
+   - Windows: `%LOCALAPPDATA%\abusive-agent\`
+   - macOS: `~/Library/Application Support/abusive-agent/`
+   - Linux: `~/.local/share/abusive-agent/`
+2. **Program:** rozpakuj [wydanie Pipera](https://github.com/rhasspy/piper/releases/tag/2023.11.14-2) dla swojego systemu do podfolderu `piper/` (tak, żeby był `piper/piper.exe` albo `piper/piper`). Może też leżeć gdzie indziej: wtedy podaj ścieżkę w `piper_path` albo dodaj go do `PATH`.
+3. **Głosy:** z [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices/tree/main) pobierz parę plików `<głos>.onnx` i `<głos>.onnx.json` do podfolderu `voices/`. Niskie męskie głosy, które brzmią dobrze: `en_US-joe-medium` (angielski) i `pl_PL-mc_speech-medium` (polski).
+4. **Wybór głosu:** wpisz ulubione w `piper_voices`, np. `en_US-joe-medium, pl_PL-mc_speech-medium`. Mod bierze głos w języku zdania, a gdy żadnego nie ma, mówi systemowym.
+
+Mod sprawdza folder raz na sesję, więc nowy głos zadziała w następnej sesji.
 
 ## Gdzie działa
 

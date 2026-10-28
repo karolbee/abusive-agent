@@ -7,7 +7,20 @@
 
 import { cleanText, detectLanguage, languageChoice, languageFromConfig, lastUserText, parseNames } from './lib/language.js'
 import { intensityChoice, intensityFromConfig, isSafeLine, lineFromReply, lineRequest, pickFallback, SITUATIONS, withName } from './lib/lines.js'
-import { parseSayVoices, speechAttempts, speechOutcome, SPEECH_TIMEOUT_MS, voiceHint } from './lib/speak.js'
+import {
+  dataDir,
+  joinPath,
+  parseSayVoices,
+  parseVoiceList,
+  pickPiperVoice,
+  piperArgv,
+  piperVoices,
+  playerArgvs,
+  speechAttempts,
+  speechOutcome,
+  SPEECH_TIMEOUT_MS,
+  voiceHint,
+} from './lib/speak.js'
 
 const DEDUPE_MS = 5000
 const GENERATIONS_PER_HOUR = 60
@@ -186,8 +199,8 @@ async function say($, s, line, lang) {
   }
   s.isSpeaking = true
   try {
-    s.platform ??= await detectPlatform($)
-    const result = await speak($, s.platform, line, lang)
+    s.platform ??= await detectPlatform($, s)
+    const result = await speak($, s, line, lang)
     log($, s, `🔊 [${lang}, ${result.voice ?? 'domyślny głos'}] ${line}`)
     if (result.missingVoice && !s.hinted.has(lang)) {
       s.hinted.add(lang)
@@ -204,16 +217,51 @@ async function say($, s, line, lang) {
 }
 
 // Windows po zmiennej OS, macOS po działającym `say`, reszta to Linux.
-async function detectPlatform($) {
-  if ((await $.env.get('OS')) === 'Windows_NT') return { os: 'windows' }
-  const voices = await $.process
-    .run(['say', '-v', '?'], { timeoutMs: 5000 })
-    .then(r => (r.exitCode === 0 ? parseSayVoices(r.stdout) : undefined))
-    .catch(() => undefined)
-  return voices ? { os: 'mac', voices } : { os: 'linux' }
+async function detectPlatform($, s) {
+  let platform = { os: 'linux' }
+  if ((await $.env.get('OS')) === 'Windows_NT') {
+    platform = { os: 'windows' }
+  } else {
+    const voices = await $.process
+      .run(['say', '-v', '?'], { timeoutMs: 5000 })
+      .then(r => (r.exitCode === 0 ? parseSayVoices(r.stdout) : undefined))
+      .catch(() => undefined)
+    if (voices) platform = { os: 'mac', voices }
+  }
+  return { ...platform, piper: await detectPiper($, s, platform.os) }
 }
 
-async function speak($, platform, line, lang) {
+// Piper jest w grze, gdy w <dane>/abusive-agent/voices leży choć jeden głos.
+// Program: ścieżka z konfiguracji, potem piper/ obok głosów, potem `piper` z PATH.
+async function detectPiper($, s, os) {
+  const env = {
+    LOCALAPPDATA: await $.env.get('LOCALAPPDATA'),
+    HOME: await $.env.get('HOME'),
+    XDG_DATA_HOME: await $.env.get('XDG_DATA_HOME'),
+  }
+  const dir = dataDir(os, env)
+  if (!dir) return undefined
+  const voicesDir = joinPath(os, dir, 'voices')
+  const entries = await $.fs.list(voicesDir).catch(() => [])
+  const voices = piperVoices(entries.map(entry => entry.name))
+  if (voices.length === 0) return undefined
+  const configured = String(s.options.piper_path ?? '').trim()
+  const bundled = joinPath(os, dir, 'piper', os === 'windows' ? 'piper.exe' : 'piper')
+  const path = configured || ((await $.fs.exists(bundled).catch(() => false)) ? bundled : 'piper')
+  return { os, path, dir, voicesDir, voices, preferred: parseVoiceList(s.options.piper_voices) }
+}
+
+async function speak($, s, line, lang) {
+  const platform = s.platform
+  const voice = platform.piper && pickPiperVoice(platform.piper.voices, lang, platform.piper.preferred)
+  if (voice) {
+    const spoken = await speakWithPiper($, platform.piper, voice, line).catch(error => error)
+    if (spoken === true) return { voice: `Piper ${voice}`, missingVoice: false }
+    // Zepsuty Piper nie spowalnia każdej tury: do końca sesji mówi system.
+    platform.piper = undefined
+    log($, s, `Piper nie działa (${spoken?.message ?? spoken}), mówię głosem systemowym`)
+  }
+
   let lastError = 'no speech synthesizer'
   for (const attempt of speechAttempts(platform, line, lang)) {
     const r = await $.process
@@ -221,6 +269,21 @@ async function speak($, platform, line, lang) {
       .catch(error => ({ exitCode: -1, stdout: '', stderr: String(error?.message ?? error) }))
     if (r.exitCode === 0) return speechOutcome(attempt, r.stdout)
     lastError = `${attempt.argv[0]} exit ${r.exitCode}: ${r.stderr.slice(0, 200)}`
+  }
+  throw new Error(lastError)
+}
+
+async function speakWithPiper($, piper, voice, line) {
+  const wav = joinPath(piper.os, piper.dir, 'line.wav')
+  const made = await $.process.run(piperArgv(piper, voice, wav), { stdin: line, timeoutMs: SPEECH_TIMEOUT_MS })
+  if (made.exitCode !== 0) throw new Error(`piper exit ${made.exitCode}: ${made.stderr.slice(-200)}`)
+  let lastError = 'no audio player'
+  for (const argv of playerArgvs(piper.os, wav)) {
+    const played = await $.process
+      .run(argv, { timeoutMs: SPEECH_TIMEOUT_MS })
+      .catch(error => ({ exitCode: -1, stderr: String(error?.message ?? error) }))
+    if (played.exitCode === 0) return true
+    lastError = `${argv[0]} exit ${played.exitCode}: ${played.stderr.slice(0, 200)}`
   }
   throw new Error(lastError)
 }

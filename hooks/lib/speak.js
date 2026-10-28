@@ -1,5 +1,6 @@
-// Adapter mowy: macOS `say`, Windows SAPI (System.Speech, awaryjnie WinRT),
-// Linux espeak-ng albo spd-say. Wszystko przez $.process.run z listą argumentów,
+// Adapter mowy: najpierw Piper (głos neuronowy z pliku .onnx), gdy jest; potem
+// systemowy: macOS `say`, Windows SAPI (System.Speech, awaryjnie WinRT), Linux
+// espeak-ng albo spd-say. Wszystko przez $.process.run z listą argumentów,
 // bez powłoki: tekst z modelu nie może wstrzyknąć komendy.
 
 import { LANGUAGES } from './language.js'
@@ -68,9 +69,72 @@ export function windowsScript(text, lang, { forceWinRT = false } = {}) {
   ].join('\n')
 }
 
-export function windowsArgv(text, lang, options) {
-  const script = windowsScript(text, lang, options)
+function powershellArgv(script) {
   return ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', base64(utf16le(script))]
+}
+
+export function windowsArgv(text, lang, options) {
+  return powershellArgv(windowsScript(text, lang, options))
+}
+
+// Folder pluginu w danych użytkownika: tu leżą piper/ i voices/.
+export function dataDir(os, env) {
+  if (os === 'windows') return env.LOCALAPPDATA ? `${env.LOCALAPPDATA}\\abusive-agent` : undefined
+  if (!env.HOME) return undefined
+  if (os === 'mac') return `${env.HOME}/Library/Application Support/abusive-agent`
+  return `${env.XDG_DATA_HOME || `${env.HOME}/.local/share`}/abusive-agent`
+}
+
+export function joinPath(os, ...parts) {
+  return parts.join(os === 'windows' ? '\\' : '/')
+}
+
+// Głosy z listy plików folderu voices/: te, które mają i .onnx, i .onnx.json.
+export function piperVoices(fileNames) {
+  const names = new Set(fileNames)
+  return fileNames
+    .filter(name => name.endsWith('.onnx') && names.has(`${name}.json`))
+    .map(name => name.slice(0, -'.onnx'.length))
+    .sort()
+}
+
+export function parseVoiceList(text) {
+  return String(text ?? '')
+    .split(/[,;\n]/)
+    .map(name => name.trim().replace(/\.onnx$/, ''))
+    .filter(Boolean)
+}
+
+// Głos w języku zdania: pierwszy ulubiony, inaczej pierwszy z folderu.
+export function pickPiperVoice(voices, lang, preferred = []) {
+  const code = LANGUAGES.includes(lang) ? lang : 'en'
+  const inLang = voices.filter(voice => voice.toLowerCase().startsWith(`${code}_`))
+  return preferred.find(voice => inLang.includes(voice)) ?? inLang[0]
+}
+
+// Piper czyta tekst ze stdin i zapisuje WAV, który potem gra odtwarzacz systemu.
+export function piperArgv(piper, voice, wav) {
+  return [piper.path, '-m', joinPath(piper.os, piper.voicesDir, `${voice}.onnx`), '-f', wav]
+}
+
+export function playerArgvs(os, wav) {
+  if (os === 'windows') {
+    const encoded = base64(new TextEncoder().encode(wav))
+    return [
+      powershellArgv(
+        [
+          "$ErrorActionPreference = 'Stop'",
+          "$p = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encoded + "'))",
+          '(New-Object System.Media.SoundPlayer $p).PlaySync()',
+        ].join('\n'),
+      ),
+    ]
+  }
+  if (os === 'mac') return [['afplay', wav]]
+  return [
+    ['paplay', wav],
+    ['aplay', '-q', wav],
+  ]
 }
 
 // `say -v '?'`: „Zosia               pl_PL    # Witaj, mam na imię Zosia.”

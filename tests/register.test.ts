@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { detectLanguage, parseNames } from '../hooks/lib/language.js'
 import { isSafeLine, parseReply, withName } from '../hooks/lib/lines.js'
+import { parseVoiceList, pickPiperVoice, piperVoices } from '../hooks/lib/speak.js'
 import pl from '../hooks/lib/fallback/pl.js'
 
 type Run = { argv: readonly string[]; init?: { stdin?: string } }
@@ -18,12 +19,15 @@ type World = {
   reply?: unknown
   sayVoices?: string
   asks?: string[]
+  files?: Record<string, string[]>
+  exists?: string[]
+  failPiper?: boolean
 }
 
 const FIELDS = ['adult_consent', 'language', 'intensity', 'names']
 
 // The world beneath the plugin: each hook answers the way the engine would.
-function world(on: On, { env = WINDOWS, reply, sayVoices, asks }: World = {}) {
+function world(on: On, { env = WINDOWS, reply, sayVoices, asks, files = {}, exists = [], failPiper }: World = {}) {
   const runs: Run[] = []
   const prompts: string[] = []
   const toasts: string[] = []
@@ -41,9 +45,17 @@ function world(on: On, { env = WINDOWS, reply, sayVoices, asks }: World = {}) {
   })
   on('process.run', (_, e) => {
     runs.push(e)
-    const stdout = e.argv[0] === 'say' && e.argv[2] === '?' ? sayVoices ?? '' : 'VOICE Microsoft Paulina Desktop'
-    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    const isPiper = /piper(\.exe)?$/.test(e.argv[0])
+    const exitCode = isPiper && failPiper ? 1 : 0
+    const stdout = e.argv[0] === 'say' && e.argv[2] === '?' ? sayVoices ?? '' : isPiper ? '' : 'VOICE Microsoft Paulina Desktop'
+    return { value: { exitCode, stdout, stderr: exitCode ? 'model failed' : '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
+  on('fs.list', (_, e) => {
+    const names = files[e.path]
+    if (!names) throw new Error(`ENOENT ${e.path}`)
+    return { value: names.map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }
+  })
+  on('fs.exists', (_, e) => ({ value: exists.includes(e.path) }))
   on('ui.toast', (_, e) => {
     toasts.push(e.text)
     return { value: undefined }
@@ -99,11 +111,15 @@ function decodeBase64(text: string): number[] {
 }
 
 // What a Windows run says: the line hidden in the script as base64 UTF-8.
-function spokenOnWindows(run: Run): { text: string; lang: string } {
-  const encoded = run.argv[run.argv.indexOf('-EncodedCommand') + 1]
-  const bytes = decodeBase64(encoded)
+function scriptOf(run: Run): string {
+  const bytes = decodeBase64(run.argv[run.argv.indexOf('-EncodedCommand') + 1])
   let script = ''
   for (let i = 0; i < bytes.length; i += 2) script += String.fromCharCode(bytes[i] | (bytes[i + 1] << 8))
+  return script
+}
+
+function spokenOnWindows(run: Run): { text: string; lang: string } {
+  const script = scriptOf(run)
   const inner = script.match(/FromBase64String\('([^']+)'\)/)?.[1] ?? ''
   const text = decodeURIComponent(decodeBase64(inner).map(b => '%' + b.toString(16).padStart(2, '0')).join(''))
   const lang = script.match(/\$lang = '([a-z]{2})'/)?.[1] ?? ''
@@ -330,7 +346,61 @@ describe('macOS', () => {
   })
 })
 
+const LOCAL = 'C:\\Users\\t\\AppData\\Local'
+const DIR = `${LOCAL}\\abusive-agent`
+const PIPER = `${DIR}\\piper\\piper.exe`
+const VOICE_FILES = ['en_GB-alan-medium.onnx', 'en_GB-alan-medium.onnx.json', 'en_US-joe-medium.onnx', 'en_US-joe-medium.onnx.json', 'pl_PL-mc_speech-medium.onnx']
+const ENGLISH = { ...CONSENT, language: 'English', piper_voices: 'en_US-joe-medium' }
+const ENGLISH_LINE = 'Done, boss, your fucking parser works.'
+const ENGLISH_REPLY = { isAnswered: true, text: JSON.stringify({ lang: 'en', line: ENGLISH_LINE }), usage: USAGE }
+const PIPER_WORLD = { env: { ...WINDOWS, LOCALAPPDATA: LOCAL }, files: { [`${DIR}\\voices`]: VOICE_FILES }, exists: [PIPER] }
+
+describe('Piper', () => {
+  test('mówi ulubionym głosem Pipera i gra WAV odtwarzaczem systemu', { options: ENGLISH }, async ($, on) => {
+    const w = world(on, { ...PIPER_WORLD, reply: ENGLISH_REPLY })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await $.turn.complete({ ...TURN, answer: ANSWER })
+    await w.flush()
+
+    expect(w.runs).toHaveLength(2)
+    expect(w.runs[0].argv).toEqual([PIPER, '-m', `${DIR}\\voices\\en_US-joe-medium.onnx`, '-f', `${DIR}\\line.wav`])
+    expect(w.runs[0].init?.stdin).toBe(ENGLISH_LINE)
+    expect(scriptOf(w.runs[1])).toContain('SoundPlayer')
+    expect(scriptOf(w.runs[1])).not.toContain('System.Speech')
+  })
+
+  test('gdy Piper padnie, mówi głos systemowy, a Piper odpada do końca sesji', { options: ENGLISH }, async ($, on) => {
+    const w = world(on, { ...PIPER_WORLD, reply: ENGLISH_REPLY, failPiper: true })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await $.turn.complete({ ...TURN, answer: ANSWER })
+    await w.flush()
+    await $.turn.complete({ ...TURN, turnId: 't2', answer: ANSWER })
+    await w.flush()
+
+    expect(w.runs.map(r => (r.argv[0] === PIPER ? 'piper' : 'system'))).toEqual(['piper', 'system', 'system'])
+    expect(spokenOnWindows(w.runs[1]).text).toBe(ENGLISH_LINE)
+  })
+
+  test('bez głosu Pipera w języku zdania mówi system', { options: CONSENT }, async ($, on) => {
+    const w = world(on, PIPER_WORLD)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await $.turn.complete({ ...TURN, answer: ANSWER })
+    await w.flush()
+
+    expect(w.runs).toHaveLength(1)
+    expect(spokenOnWindows(w.runs[0])).toEqual({ text: HAIKU_LINE, lang: 'pl' })
+  })
+})
+
 describe('pomocnicze', () => {
+  test('głosy Pipera z folderu i wybór głosu', () => {
+    const voices = piperVoices(VOICE_FILES)
+    expect(voices).toEqual(['en_GB-alan-medium', 'en_US-joe-medium'])
+    expect(pickPiperVoice(voices, 'en', parseVoiceList('pl_PL-darkman-medium, en_US-joe-medium.onnx'))).toBe('en_US-joe-medium')
+    expect(pickPiperVoice(voices, 'en')).toBe('en_GB-alan-medium')
+    expect(pickPiperVoice(voices, 'pl')).toBe(undefined)
+  })
+
   test('wykrywa język po znakach i słowach', () => {
     expect(detectLanguage('Napraw mi ten parser, bo się wywala')).toBe('pl')
     expect(detectLanguage('Please fix the parser, it crashes on empty lines')).toBe('en')
